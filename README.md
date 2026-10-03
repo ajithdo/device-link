@@ -16,6 +16,7 @@ Why two bots? A Telegram bot never receives its own messages. Each device gets i
 | Laptop clipboard → phone | Automatic. The desktop script checks the clipboard every 0.5 s; the phone receives through a Telegram long-poll |
 | Phone clipboard → laptop | Automatic after a one-time ADB grant (Android 10+), or use the notification button / Quick Settings tile / share text |
 | Links posted by hand in the channel | Also opened on the laptop |
+| Plain text posted by hand in the channel | Copied to the laptop clipboard (`"plain_text_to_clipboard": false` to turn off) |
 | Long text (>4000 chars) | Sent as a `clipboard.txt` document, which the other side downloads |
 
 ## 1. Telegram setup (about 5 min)
@@ -35,7 +36,7 @@ python device_link.py             # run it
 
 `--setup` finds the channel ID and saves `config.json`. Write that ID down, because the phone app needs it too.
 
-Options: `--no-clipboard`, `--no-links`, `--skip-backlog` (don't open links shared while the script was off), `-v`.
+Options: `--no-clipboard`, `--no-links`, `--skip-backlog` (don't open links shared while the script was off), `--diagnose`, `-v`.
 You can also use the environment variables `DEVICE_LINK_BOT_TOKEN` and `DEVICE_LINK_CHAT_ID` instead of `config.json`.
 
 **Linux:** pyperclip needs a clipboard tool: `sudo apt install xclip` (X11) or `wl-clipboard` (Wayland).
@@ -43,6 +44,31 @@ You can also use the environment variables `DEVICE_LINK_BOT_TOKEN` and `DEVICE_L
 **Run at login**
 - Windows: create a shortcut to `pythonw device_link.py` in `shell:startup`.
 - macOS / Linux: add `python3 /path/to/device_link.py` to Login Items / your desktop's autostart (or a `systemd --user` service).
+
+### Troubleshooting the desktop script
+
+Every post the script receives is logged with what it did with it, for example:
+
+```
+INFO Received clip post from phone: 'copied on phone'
+INFO   -> copied to clipboard (15 chars)
+```
+
+If nothing shows up when you post in the channel, run:
+
+```bash
+python device_link.py --diagnose
+```
+
+It checks the token, whether a webhook is blocking polling, whether the bot can see the channel and is an admin, and whether the clipboard works. Then it prints every post the bot receives for 90 seconds.
+
+| Symptom | Cause / fix |
+|---|---|
+| `Ignoring post from channel …; config chat_id is …` | The channel ID in `config.json` is wrong. Run `--setup` again |
+| `Conflict: terminated by other getUpdates request` | The same bot token is used on the phone, or the script is running twice. Each device needs its **own** bot |
+| Your own posts show up but `from=phone` ones never do | The phone app uses the wrong token or channel ID |
+| Script stops printing and syncing (Windows) | You clicked in the console and it entered "Select" mode. Press **Esc**. The script now turns this mode off when it starts |
+| `could not write to the clipboard` | Another app is holding the clipboard. The script retries 5 times before giving up |
 
 ## 3. Android app (Android 8.0+)
 

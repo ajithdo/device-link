@@ -140,6 +140,15 @@ class Telegram:
             params["offset"] = offset
         return self.call("getUpdates", http_timeout=timeout + 10, **params)
 
+    def get_webhook_info(self):
+        return self.call("getWebhookInfo", http_timeout=15)
+
+    def get_chat(self, chat_id):
+        return self.call("getChat", http_timeout=15, chat_id=chat_id)
+
+    def get_chat_member(self, chat_id, user_id):
+        return self.call("getChatMember", http_timeout=15, chat_id=chat_id, user_id=user_id)
+
     def send_text(self, chat_id, text: str):
         return self.call("sendMessage", http_timeout=20, chat_id=chat_id, text=text,
                          disable_web_page_preview=True, disable_notification=True)
@@ -163,6 +172,50 @@ def send_clip(tg: Telegram, chat_id, device: str, text: str):
     else:
         tg.send_document(chat_id, "clipboard.txt", text.encode("utf-8"),
                          build_header(KIND_CLIP, device))
+
+
+def summarize(text: str, post: Optional[dict] = None, limit: int = 60) -> str:
+    if post and post.get("document"):
+        return f"[file {post['document'].get('file_name', '')}]"
+    one_line = " ".join(text.split())
+    return repr(one_line if len(one_line) <= limit else one_line[:limit] + "...")
+
+
+def same_text(a: Optional[str], b: Optional[str]) -> bool:
+    """Compare clipboard text ignoring CRLF/LF differences (Windows clipboard uses CRLF)."""
+    if a is None or b is None:
+        return a is b
+    return a.replace("\r\n", "\n") == b.replace("\r\n", "\n")
+
+
+def polling_hint(exc: Exception) -> str:
+    text = str(exc)
+    if "Conflict" in text and "webhook" in text:
+        return " -> this bot has a webhook set; run --diagnose to remove it."
+    if "Conflict" in text:
+        return (" -> another program is polling this bot. Make sure the phone app uses the OTHER bot's token"
+                " and only one copy of this script is running.")
+    if "Unauthorized" in text:
+        return " -> the bot token is wrong or was revoked; run --setup again."
+    return ""
+
+
+def disable_windows_quickedit():
+    """Clicking in a Windows console enables QuickEdit selection, which freezes this script.
+
+    Turn QuickEdit off for this console so a stray click can't stall syncing."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-10)          # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            ENABLE_QUICK_EDIT_MODE, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
+            kernel32.SetConsoleMode(handle, (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS)
+    except Exception:  # noqa: BLE001 - purely a convenience
+        pass
 
 
 # --------------------------------------------------------------------------- clipboard
@@ -191,8 +244,17 @@ class Clipboard:
             log.debug("Clipboard read failed: %s", exc)
             return None
 
-    def copy(self, text: str):
-        self._pc.copy(text)
+    def copy(self, text: str, attempts: int = 5):
+        """Copy with retries: on Windows another app may briefly hold the clipboard open."""
+        for attempt in range(1, attempts + 1):
+            try:
+                self._pc.copy(text)
+                return
+            except Exception as exc:  # noqa: BLE001 - pyperclip raises various types
+                if attempt == attempts:
+                    raise
+                log.debug("Clipboard write failed (%s), retrying", exc)
+                time.sleep(0.2 * attempt)
 
 
 # --------------------------------------------------------------------------- app
@@ -207,6 +269,7 @@ class Config:
     sync_clipboard: bool = True
     clipboard_poll_seconds: float = 0.5
     open_backlog_links: bool = True
+    plain_text_to_clipboard: bool = True   # untagged posts without links -> clipboard
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -239,34 +302,62 @@ class LinkSync:
     # ---- incoming
 
     def handle_updates(self, updates: Iterable[dict], backlog: bool = False):
-        """Process a batch of updates. Only the newest clip in a batch is applied."""
+        """Process a batch of updates. Only the newest clip in a batch is applied.
+
+        - "#clip" posts           -> clipboard
+        - "#link" posts           -> opened in the browser
+        - untagged posts with URLs -> opened in the browser
+        - untagged plain text      -> clipboard (plain_text_to_clipboard)
+        """
         latest_clip = None
         for upd in updates:
             post = upd.get("channel_post")
-            if not post or post.get("chat", {}).get("id") != self.cfg.chat_id:
+            if not post:
+                log.debug("Skipping non-channel update %s", upd.get("update_id"))
+                continue
+            chat = post.get("chat", {})
+            if chat.get("id") != self.cfg.chat_id:
+                log.warning("Ignoring post from channel %s (%r); config chat_id is %s. "
+                            "Re-run --setup if this is your channel.",
+                            chat.get("id"), chat.get("title"), self.cfg.chat_id)
                 continue
             text = post.get("text") or post.get("caption") or ""
             msg = parse_message(text)
+            log.info("Received %s post from %s: %s", msg.kind or "plain", msg.source or "channel",
+                     summarize(msg.payload, post))
             if msg.source == self.me:
+                log.info("  -> skipped: tagged with this device's own name '%s'", self.me)
                 continue
             if msg.kind == KIND_CLIP:
                 latest_clip = (post, msg)
-            elif msg.kind == KIND_LINK or msg.kind is None:
-                if backlog and not self.cfg.open_backlog_links:
-                    continue
-                self._open_links(msg.payload)
+                continue
+            urls = extract_urls(msg.payload)
+            if msg.kind is None and not urls:
+                if not self.cfg.plain_text_to_clipboard:
+                    log.info("  -> skipped: plain text (plain_text_to_clipboard is off)")
+                elif not msg.payload.strip() and not post.get("document"):
+                    log.info("  -> skipped: no text (photos/stickers are not synced)")
+                else:
+                    latest_clip = (post, msg)
+                continue
+            if backlog and not self.cfg.open_backlog_links:
+                log.info("  -> skipped: link was shared while the script was off (--skip-backlog)")
+                continue
+            self._open_links(urls)
         if latest_clip:
             self._apply_clip(*latest_clip)
 
-    def _open_links(self, text: str):
+    def _open_links(self, urls: list[str]):
         if not self.cfg.open_links:
+            log.info("  -> skipped: link opening is disabled (--no-links)")
             return
-        for url in extract_urls(text):
-            log.info("Opening %s", url)
+        for url in urls:
+            log.info("  -> opening %s", url)
             self.open_url(url)
 
     def _apply_clip(self, post: dict, msg: Message):
         if not (self.cfg.sync_clipboard and self.clipboard and self.clipboard.available):
+            log.info("  -> skipped: clipboard sync is off or the clipboard is unavailable")
             return
         text = msg.payload
         doc = post.get("document")
@@ -275,10 +366,14 @@ class LinkSync:
                 log.warning("Ignoring oversized clipboard document")
                 return
             text = self.tg.download_file(doc["file_id"]).decode("utf-8", errors="replace")
-        with self._lock:
-            self._last_clip = text
-            self.clipboard.copy(text)
-        log.info("Clipboard updated from %s (%d chars)", msg.source or "channel", len(text))
+        try:
+            with self._lock:
+                self.clipboard.copy(text)
+                self._last_clip = text
+        except Exception as exc:  # noqa: BLE001
+            log.error("  -> could not write to the clipboard: %s", exc)
+            return
+        log.info("  -> copied to clipboard (%d chars)", len(text))
 
     # ---- outgoing
 
@@ -288,7 +383,7 @@ class LinkSync:
         if current is None or not current.strip():
             return False
         with self._lock:
-            if current == self._last_clip:
+            if same_text(current, self._last_clip):
                 return False
             self._last_clip = current
         if len(current.encode("utf-8")) > MAX_CLIP_BYTES:
@@ -317,6 +412,8 @@ class LinkSync:
         if self.cfg.sync_clipboard and self.clipboard and self.clipboard.available:
             threading.Thread(target=self.clipboard_loop, daemon=True, name="clipboard").start()
 
+        disable_windows_quickedit()
+        log.info("Waiting for channel posts... (run with --diagnose if nothing arrives)")
         offset = None
         first = True
         backoff = 1
@@ -325,7 +422,7 @@ class LinkSync:
                 updates = self.tg.get_updates(offset)
                 backoff = 1
             except (TelegramError, requests.RequestException) as exc:
-                log.warning("Polling failed: %s (retrying in %ss)", exc, backoff)
+                log.warning("Polling failed: %s (retrying in %ss)%s", exc, backoff, polling_hint(exc))
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60)
                 continue
@@ -380,10 +477,105 @@ def setup(path: Path):
     print(f"\nSaved {path}. Use channel id {chat_id} in the Android app too.")
 
 
+def diagnose(cfg: Config, listen_seconds: int = 90):
+    """Check every link in the chain and print what the bot actually receives."""
+    ok = lambda m: print(f"  [OK]   {m}")
+    bad = lambda m: print(f"  [FAIL] {m}")
+    tg = Telegram(cfg.bot_token)
+    print("Device Link diagnostics\n")
+
+    print("1. Bot token")
+    try:
+        me = tg.get_me()
+        ok(f"token works, bot is @{me['username']} (id {me['id']})")
+    except Exception as exc:  # noqa: BLE001
+        bad(f"{exc} -> copy the LAPTOP bot token from @BotFather and run --setup")
+        return
+
+    print("2. Webhook (blocks polling if set)")
+    hook = tg.get_webhook_info()
+    if hook.get("url"):
+        bad(f"webhook set to {hook['url']}; removing it")
+        tg.call("deleteWebhook", http_timeout=15)
+    else:
+        ok("no webhook")
+    if hook.get("pending_update_count"):
+        print(f"         {hook['pending_update_count']} update(s) waiting to be read")
+
+    print(f"3. Channel {cfg.chat_id}")
+    try:
+        chat = tg.get_chat(cfg.chat_id)
+        ok(f"bot can see channel {chat.get('title')!r} (type {chat.get('type')})")
+        if chat.get("type") != "channel":
+            bad("this is not a channel; bots can't see other bots' messages in groups. Use a private channel.")
+    except Exception as exc:  # noqa: BLE001
+        bad(f"{exc} -> wrong chat_id, or the bot is not in the channel. Run --setup again.")
+        return
+    try:
+        member = tg.get_chat_member(cfg.chat_id, me["id"])
+        status = member.get("status")
+        if status in ("administrator", "creator"):
+            ok(f"bot is {status}" + ("" if member.get("can_post_messages", True)
+                                    else " but CANNOT post messages (enable 'Post messages')"))
+        else:
+            bad(f"bot status is {status!r}; it must be an administrator to receive channel posts")
+    except Exception as exc:  # noqa: BLE001
+        bad(f"could not check admin status: {exc}")
+
+    print("4. Clipboard")
+    clip = Clipboard()
+    if clip.available:
+        before = clip.paste()
+        probe = f"device-link test {int(time.time())}"
+        try:
+            clip.copy(probe)
+            if same_text(clip.paste(), probe):
+                ok("clipboard read/write works")
+            else:
+                bad("wrote to the clipboard but read back something else (clipboard manager interfering?)")
+        except Exception as exc:  # noqa: BLE001
+            bad(f"clipboard write failed: {exc}")
+        finally:
+            if before is not None:
+                clip.copy(before)
+    else:
+        bad("clipboard unavailable (Linux: install xclip / wl-clipboard)")
+
+    print(f"5. Live check: listening for {listen_seconds}s. Now:")
+    print("     - type some text in the channel from Telegram, and")
+    print("     - tap 'Send clipboard' in the phone notification")
+    print("   (Press Ctrl+C to stop.)\n")
+    seen = 0
+    offset = None
+    deadline = time.time() + listen_seconds
+    try:
+        while time.time() < deadline:
+            for upd in tg.get_updates(offset, timeout=min(20, max(1, int(deadline - time.time())))):
+                offset = upd["update_id"] + 1
+                post = upd.get("channel_post") or {}
+                text = post.get("text") or post.get("caption") or ""
+                msg = parse_message(text)
+                seen += 1
+                where = post.get("chat", {}).get("id")
+                note = "" if where == cfg.chat_id else f"  <-- different channel than config ({cfg.chat_id})"
+                print(f"   received from chat {where}: kind={msg.kind or 'plain'} "
+                      f"from={msg.source or 'you/channel'} {summarize(msg.payload, post)}{note}")
+    except KeyboardInterrupt:
+        pass
+    if seen:
+        print(f"\n  [OK]   received {seen} post(s). If posts 'from=phone' never show up but your own do,")
+        print("         the phone app is using the wrong token or channel.")
+    else:
+        print("\n  [FAIL] nothing received. Check the bot is an admin of the channel and that you posted in")
+        print("         that channel (not in a chat with the bot).")
+    print("\nNote: posts read here are consumed; send them again once the script is running.")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Open links and sync clipboard with your phone via Telegram.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--setup", action="store_true", help="interactive first-time configuration")
+    parser.add_argument("--diagnose", action="store_true", help="check bot, channel and clipboard, then show live posts")
     parser.add_argument("--no-clipboard", action="store_true", help="disable clipboard sync")
     parser.add_argument("--no-links", action="store_true", help="don't open shared links")
     parser.add_argument("--skip-backlog", action="store_true",
@@ -398,6 +590,9 @@ def main(argv=None):
         return
 
     cfg = Config.load(args.config)
+    if args.diagnose:
+        diagnose(cfg)
+        return
     if args.no_clipboard:
         cfg.sync_clipboard = False
     if args.no_links:

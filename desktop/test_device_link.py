@@ -1,6 +1,9 @@
+import logging
 import unittest
 
 import device_link as dl
+
+logging.disable(logging.CRITICAL)
 
 CHAT = -100123
 
@@ -169,6 +172,68 @@ class SyncTests(unittest.TestCase):
         app, tg, _ = make_app()
         app.clipboard.value = "   "
         self.assertFalse(app.check_clipboard())
+
+    def test_plain_text_goes_to_clipboard(self):
+        app, _, opened = make_app()
+        app.handle_updates([post("typed in the channel")])
+        self.assertEqual(app.clipboard.value, "typed in the channel")
+        self.assertEqual(opened, [])
+
+    def test_plain_text_with_link_is_opened_not_copied(self):
+        app, _, opened = make_app("before")
+        app.handle_updates([post("see https://example.com")])
+        self.assertEqual(opened, ["https://example.com"])
+        self.assertEqual(app.clipboard.value, "before")
+
+    def test_plain_text_to_clipboard_can_be_disabled(self):
+        app, _, _ = make_app("before")
+        app.cfg.plain_text_to_clipboard = False
+        app.handle_updates([post("typed")])
+        self.assertEqual(app.clipboard.value, "before")
+
+    def test_clipboard_write_failure_does_not_lose_links(self):
+        app, _, opened = make_app()
+
+        def broken(text):
+            raise RuntimeError("OpenClipboard failed")
+
+        app.clipboard.copy = broken
+        app.handle_updates([post("https://example.com", uid=1), post("#clip #from_phone\nx", uid=2)])
+        self.assertEqual(opened, ["https://example.com"])
+        self.assertIsNone(app._last_clip)   # not marked as synced, so a later copy still works
+
+    def test_crlf_echo_is_not_resent(self):
+        app, tg, _ = make_app()
+        app.handle_updates([post("#clip #from_phone\nline1\nline2")])
+        app.clipboard.value = "line1\r\nline2"     # how Windows hands it back
+        self.assertFalse(app.check_clipboard())
+        self.assertEqual(tg.sent, [])
+
+
+class ClipboardRetryTests(unittest.TestCase):
+    def test_retries_until_clipboard_is_free(self):
+        calls = []
+
+        class FlakyPyperclip:
+            def copy(self, text):
+                calls.append(text)
+                if len(calls) < 3:
+                    raise RuntimeError("OpenClipboard failed")
+
+        clip = dl.Clipboard.__new__(dl.Clipboard)
+        clip._pc = FlakyPyperclip()
+        clip.copy("hi")
+        self.assertEqual(len(calls), 3)
+
+
+class HintTests(unittest.TestCase):
+    def test_conflict_hint(self):
+        hint = dl.polling_hint(dl.TelegramError("getUpdates: Conflict: terminated by other getUpdates request"))
+        self.assertIn("OTHER bot", hint)
+
+    def test_webhook_hint(self):
+        hint = dl.polling_hint(dl.TelegramError("getUpdates: Conflict: can't use getUpdates method while webhook is active"))
+        self.assertIn("--diagnose", hint)
 
 
 if __name__ == "__main__":
