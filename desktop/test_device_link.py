@@ -45,6 +45,48 @@ def make_app(clip=""):
     return app, tg, opened
 
 
+class FakeResponse:
+    status_code = 200
+
+    def __init__(self, result):
+        self._result = result
+
+    def json(self):
+        return {"ok": True, "result": self._result}
+
+
+class FakeSession:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, json=None, data=None, files=None, timeout=None):
+        self.calls.append((url.rsplit("/", 1)[1], json or data, timeout))
+        return FakeResponse([] if url.endswith("getUpdates") else {"username": "bot"})
+
+
+class TelegramClientTests(unittest.TestCase):
+    """Exercise the real Telegram client so argument mix-ups surface without network access."""
+
+    def setUp(self):
+        self.session = FakeSession()
+        self.tg = dl.Telegram("123:abc", self.session)
+
+    def test_get_updates_passes_long_poll_timeout(self):
+        self.tg.get_updates(5, timeout=20)
+        method, params, http_timeout = self.session.calls[0]
+        self.assertEqual(method, "getUpdates")
+        self.assertEqual(params["timeout"], 20)
+        self.assertEqual(params["offset"], 5)
+        self.assertGreater(http_timeout, 20)
+
+    def test_other_methods(self):
+        self.tg.get_me()
+        self.tg.send_text(CHAT, "hi")
+        self.tg.send_document(CHAT, "clipboard.txt", b"x", "#clip")
+        self.assertEqual([c[0] for c in self.session.calls], ["getMe", "sendMessage", "sendDocument"])
+        self.assertEqual(self.session.calls[1][1]["text"], "hi")
+
+
 class ProtocolTests(unittest.TestCase):
     def test_round_trip(self):
         text = dl.build_message("clip", "My Phone!", "hello\nworld")

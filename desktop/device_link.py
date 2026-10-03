@@ -112,12 +112,12 @@ class Telegram:
     def _url(self, method: str) -> str:
         return f"{API_BASE}/bot{self.token}/{method}"
 
-    def call(self, method: str, timeout: float = 30, files=None, **params):
+    def call(self, method: str, http_timeout: float = 30, files=None, **params):
         while True:
             if files:
-                resp = self.session.post(self._url(method), data=params, files=files, timeout=timeout)
+                resp = self.session.post(self._url(method), data=params, files=files, timeout=http_timeout)
             else:
-                resp = self.session.post(self._url(method), json=params, timeout=timeout)
+                resp = self.session.post(self._url(method), json=params, timeout=http_timeout)
             try:
                 data = resp.json()
             except ValueError:
@@ -132,25 +132,25 @@ class Telegram:
             raise TelegramError(f"{method}: {data.get('description', resp.status_code)}")
 
     def get_me(self):
-        return self.call("getMe", timeout=15)
+        return self.call("getMe", http_timeout=15)
 
     def get_updates(self, offset: Optional[int], timeout: int = 25):
         params = {"timeout": timeout, "allowed_updates": ["channel_post"]}
         if offset is not None:
             params["offset"] = offset
-        return self.call("getUpdates", timeout=timeout + 10, **params)
+        return self.call("getUpdates", http_timeout=timeout + 10, **params)
 
     def send_text(self, chat_id, text: str):
-        return self.call("sendMessage", timeout=20, chat_id=chat_id, text=text,
+        return self.call("sendMessage", http_timeout=20, chat_id=chat_id, text=text,
                          disable_web_page_preview=True, disable_notification=True)
 
     def send_document(self, chat_id, filename: str, content: bytes, caption: str):
         files = {"document": (filename, io.BytesIO(content), "text/plain")}
-        return self.call("sendDocument", timeout=60, files=files, chat_id=chat_id,
+        return self.call("sendDocument", http_timeout=60, files=files, chat_id=chat_id,
                          caption=caption, disable_notification="true")
 
     def download_file(self, file_id: str) -> bytes:
-        info = self.call("getFile", timeout=20, file_id=file_id)
+        info = self.call("getFile", http_timeout=20, file_id=file_id)
         resp = self.session.get(f"{API_BASE}/file/bot{self.token}/{info['file_path']}", timeout=60)
         resp.raise_for_status()
         return resp.content
