@@ -40,6 +40,7 @@ DEFAULT_CONFIG = Path(__file__).with_name("config.json")
 
 URL_RE = re.compile(r"""https?://[^\s<>"'`]+""", re.IGNORECASE)
 TRAILING_PUNCT = ".,;:!?)]}'\""
+TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{30,}$")
 
 
 # --------------------------------------------------------------------------- protocol
@@ -348,9 +349,17 @@ def setup(path: Path):
     print("1. In @BotFather create a bot for this computer (e.g. 'my_laptop_link_bot').")
     print("2. Create a private Telegram channel and add BOTH bots (phone + laptop) as administrators")
     print("   with permission to post messages.\n")
-    token = input("Laptop bot token: ").strip()
-    tg = Telegram(token)
-    me = tg.get_me()
+    while True:
+        token = input("Laptop bot token: ").strip()
+        if not TOKEN_RE.match(token):
+            print("  That doesn't look like a bot token (expected something like 1234567890:AAH...). Try again.")
+            continue
+        tg = Telegram(token)
+        try:
+            me = tg.get_me()
+            break
+        except TelegramError as exc:
+            print(f"  Telegram rejected this token ({exc}). Copy it again from @BotFather.")
     print(f"OK, bot is @{me['username']}.\n")
     print("Now post any message (e.g. 'hello') in the private channel...")
     chat_id = None
