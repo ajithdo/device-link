@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -54,6 +55,12 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
         findViewById<Button>(R.id.battery).setOnClickListener { requestBatteryExemption() }
+        findViewById<Button>(R.id.notifications).setOnClickListener {
+            startActivity(
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            )
+        }
 
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
     }
@@ -168,9 +175,14 @@ class MainActivity : Activity() {
         val running = isServiceRunning()
         toggle.text = if (running) "Stop sync" else "Start sync"
         fun mark(ok: Boolean) = if (ok) "✅" else "❌"
+        val notificationsOn = getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+        findViewById<Button>(R.id.notifications).visibility =
+            if (notificationsOn) android.view.View.GONE else android.view.View.VISIBLE
         val lines = mutableListOf(
             "${mark(running)} Sync service ${if (running) "running" else "stopped"}",
             "${mark(prefs.isConfigured)} Configured",
+            "${mark(notificationsOn)} Notifications allowed" +
+                if (notificationsOn) "" else " (needed for the \"Send clipboard\" button)",
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             lines += "${mark(SyncService.hasReadLogs(this))} READ_LOGS granted (via ADB)"

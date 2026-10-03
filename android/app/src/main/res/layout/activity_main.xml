@@ -89,6 +89,13 @@
                 android:text="Start sync" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/notifications"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Allow notifications"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/status"
             android:layout_width="match_parent"
