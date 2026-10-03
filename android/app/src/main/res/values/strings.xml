@@ -2,4 +2,6 @@
     <string name="app_name">Device Link</string>
     <string name="share_label">Send to laptop</string>
     <string name="tile_label">Send clipboard</string>
+    <string name="accessibility_summary">Sends text you copy on this phone to your laptop automatically</string>
+    <string name="accessibility_description">Device Link listens only for copy actions (tapping "Copy", or a "Copied" message). When you copy text, it reads the clipboard once and sends it to your laptop through your private Telegram channel. It does not read screen content.</string>
 </resources>

@@ -1,7 +1,6 @@
 package com.devicelink
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,7 +11,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -20,9 +18,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
-import android.view.Gravity
-import android.view.View
-import android.view.WindowManager
 import org.json.JSONObject
 
 /**
@@ -30,10 +25,10 @@ import org.json.JSONObject
  *  1. long-polls the phone bot for "#clip" posts from the laptop and writes them to the clipboard;
  *  2. watches the local clipboard and posts changes as "#clip".
  *
- * Android 10+ only lets the focused app read the clipboard. When READ_LOGS has been granted via
- * ADB, we watch logcat for ClipboardService's "Denying clipboard access to <us>" line (emitted on
- * every copy because we hold a clipboard listener) and then briefly add an invisible, focusable
- * 1x1 overlay window so we are allowed to read the new clip.
+ * Android 10+ only lets the focused app read the clipboard. Copies are detected either by
+ * [CopyDetectorService] (accessibility) or, when READ_LOGS has been granted via ADB, by watching
+ * logcat for ClipboardService's "Denying clipboard access to <us>" line (emitted on every copy
+ * because we hold a clipboard listener). [ClipCapture] then reads the new clip.
  */
 class SyncService : Service() {
 
@@ -53,6 +48,7 @@ class SyncService : Service() {
 
         fun canAutoCapture(context: Context): Boolean =
             Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                CopyDetectorService.isEnabled(context) ||
                 (hasReadLogs(context) && Settings.canDrawOverlays(context))
 
         fun hasReadLogs(context: Context) =
@@ -65,11 +61,10 @@ class SyncService : Service() {
     private var logcatProcess: Process? = null
     private val main = Handler(Looper.getMainLooper())
     private lateinit var clipboard: ClipboardManager
-    private var overlay: View? = null
 
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
         // Fires directly on Android < 10, or on newer versions while our UI is focused.
-        readClipboard()?.let { ClipSync.sendClip(this, it) }
+        ClipCapture.readClipboard(this)?.let { ClipSync.sendClip(this, it) }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -100,7 +95,6 @@ class SyncService : Service() {
         clipboard.removePrimaryClipChangedListener(clipListener)
         logcatProcess?.destroy()
         pollThread?.interrupt()
-        removeOverlay()
         super.onDestroy()
     }
 
@@ -189,12 +183,6 @@ class SyncService : Service() {
 
     // ------------------------------------------------------------------ phone -> laptop
 
-    private fun readClipboard(): String? = try {
-        clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
-    } catch (e: SecurityException) {
-        null
-    }
-
     private fun logcatLoop() {
         val needle = "Denying clipboard access to $packageName"
         try {
@@ -206,54 +194,11 @@ class SyncService : Service() {
                     if (!running) break
                     // Skip the replayed tail line from before we started.
                     if (SystemClock.elapsedRealtime() - started < 1500) continue
-                    if (line.contains(needle)) main.post(::captureViaOverlay)
+                    if (line.contains(needle)) ClipCapture.request(this@SyncService)
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "logcat watcher stopped", e)
-        }
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun captureViaOverlay() {
-        if (overlay != null) return
-        if (!Settings.canDrawOverlays(this)) {
-            Log.w(TAG, "Overlay permission missing; cannot capture clipboard automatically")
-            return
-        }
-        val wm = getSystemService(WindowManager::class.java)
-        val view = object : View(this) {
-            override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
-                super.onWindowFocusChanged(hasWindowFocus)
-                if (hasWindowFocus) {
-                    readClipboard()?.let { ClipSync.sendClip(this@SyncService, it) }
-                    removeOverlay()
-                }
-            }
-        }
-        val params = WindowManager.LayoutParams(
-            1, 1,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        try {
-            wm.addView(view, params)
-            overlay = view
-            main.postDelayed(::removeOverlay, 1500)   // never keep focus longer than this
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not add overlay", e)
-        }
-    }
-
-    private fun removeOverlay() {
-        val view = overlay ?: return
-        overlay = null
-        try {
-            getSystemService(WindowManager::class.java).removeView(view)
-        } catch (_: Exception) {
         }
     }
 }

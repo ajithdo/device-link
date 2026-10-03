@@ -90,9 +90,20 @@ Then sideload it (allow "Install unknown apps").
 
 ### Automatic phone → laptop clipboard (Android 10+)
 
-Android 10 and newer only lets the app in front read the clipboard. To sync phone copies automatically:
+Android 10 and newer only lets the app in front read the clipboard. There are two ways to sync phone copies automatically. Both also need **Allow display over other apps** (button in the app).
 
-1. Enable *Developer options → USB debugging*, connect to the computer, and run once:
+**Option 1: automatic copy detection (Accessibility, no PC needed)**
+
+1. In the app, tap **Turn on automatic copy detection**. This opens Settings → Accessibility.
+2. Open **Device Link** (it may be under *Downloaded apps* / *Installed services*) and turn it on.
+   - Android 13+ may say the setting is **restricted** because the app wasn't installed from the Play Store. Go to Settings → Apps → Device Link → **⋮** (top right) → **Allow restricted settings**, then try again.
+3. Copy something on the phone. It reaches the laptop within a second or two.
+
+The service listens only for copy actions: a tap on a "Copy" button or menu item, a "Copied" message, or the system clipboard preview. It doesn't read screen content. When it sees one, it briefly adds an invisible 1×1 window so Android allows a single clipboard read. A copy made without any visible "Copy" button or message (rare, e.g. some custom copy icons) may be missed. Use the Send clipboard tile for those. On phones that aggressively stop background apps (ColorOS, MIUI), also allow background activity and auto-launch for Device Link.
+
+**Option 2: ADB grant (only if your phone allows it)**
+
+1. Enable *Developer options → USB debugging* (on OPPO/realme/OnePlus also *Disable permission monitoring*, if present), connect to the computer, and run once:
    ```bash
    adb shell pm grant com.devicelink android.permission.READ_LOGS
    ```

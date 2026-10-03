@@ -55,6 +55,10 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
         findViewById<Button>(R.id.battery).setOnClickListener { requestBatteryExemption() }
+        findViewById<Button>(R.id.accessibility).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            ClipSync.showToast(this, "Open \"Device Link\" (maybe under Downloaded apps) and turn it on")
+        }
         findViewById<Button>(R.id.notifications).setOnClickListener {
             startActivity(
                 Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -185,8 +189,12 @@ class MainActivity : Activity() {
                 if (notificationsOn) "" else " (needed for the \"Send clipboard\" button)",
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            lines += "${mark(SyncService.hasReadLogs(this))} READ_LOGS granted (via ADB)"
+            val a11y = CopyDetectorService.isEnabled(this)
+            findViewById<Button>(R.id.accessibility).visibility =
+                if (a11y) android.view.View.GONE else android.view.View.VISIBLE
+            lines += "${mark(a11y)} Automatic copy detection (Accessibility)"
             lines += "${mark(Settings.canDrawOverlays(this))} Display over other apps"
+            if (!a11y) lines += "${mark(SyncService.hasReadLogs(this))} READ_LOGS granted (ADB alternative)"
             lines += if (SyncService.canAutoCapture(this)) {
                 "→ Copies on this phone are sent automatically."
             } else {

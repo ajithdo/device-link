@@ -1,26 +1,33 @@
 package com.devicelink
 
 import android.app.Activity
-import android.content.ClipboardManager
 
 /**
- * Invisible activity launched from the notification action or Quick Settings tile. Android 10+
- * only allows clipboard reads once our window has focus, so we read in onWindowFocusChanged.
+ * Invisible activity launched from the notification action, the Quick Settings tile, or as a
+ * fallback by [ClipCapture]. Android 10+ only allows clipboard reads once our window has focus,
+ * so we read in onWindowFocusChanged.
  */
 class ClipboardSendActivity : Activity() {
+    companion object {
+        /** Set when launched automatically after a detected copy: no toast, skip unchanged text. */
+        const val EXTRA_AUTO = "auto"
+    }
+
     private var done = false
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus || done) return
         done = true
-        val clip = getSystemService(ClipboardManager::class.java).primaryClip
-        val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+        val auto = intent.getBooleanExtra(EXTRA_AUTO, false)
+        val text = ClipCapture.readClipboard(this)
         if (text.isNullOrBlank()) {
-            ClipSync.showToast(this, "Clipboard is empty")
+            if (!auto) ClipSync.showToast(this, "Clipboard is empty")
         } else {
-            ClipSync.sendClip(this, text, force = true, toast = true)
+            ClipSync.sendClip(this, text, force = !auto, toast = !auto)
         }
         finish()
+        @Suppress("DEPRECATION")
+        overridePendingTransition(0, 0)
     }
 }

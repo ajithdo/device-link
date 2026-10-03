@@ -110,6 +110,19 @@
             android:text="Automatic phone → laptop clipboard (Android 10+)"
             android:textStyle="bold" />
 
+        <Button
+            android:id="@+id/accessibility"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Turn on automatic copy detection" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Alternative (if your phone allows it): grant via ADB"
+            android:textSize="12sp" />
+
         <TextView
             android:id="@+id/adb"
             android:layout_width="match_parent"
