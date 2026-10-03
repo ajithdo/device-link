@@ -1,0 +1,9 @@
+{
+  "bot_token": "123456789:LAPTOP-BOT-TOKEN",
+  "chat_id": -1001234567890,
+  "device_name": "laptop",
+  "open_links": true,
+  "sync_clipboard": true,
+  "clipboard_poll_seconds": 0.5,
+  "open_backlog_links": true
+}

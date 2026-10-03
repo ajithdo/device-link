@@ -1,0 +1,6 @@
+<resources>
+    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Transparent" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>
